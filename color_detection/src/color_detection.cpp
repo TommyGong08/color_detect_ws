@@ -10,9 +10,12 @@
 #include <math.h>
 #include <nav_msgs/Odometry.h>
 
+#define WIDTH_MIN 0
+#define WIDTH_MAX 640
+
 using namespace cv;
 
-static const std::string OPENCV_WINDOW = "Processed image";
+static const std::string OPENCV_WINDOW = "Color Detector";
 //static const std::string HSV_WINDOW = "HSV Image";
 static const std::string Contour_WINDOW = "Contoured Image";
 
@@ -43,7 +46,6 @@ public:
    : it_(nh_){
    image_sub_ = it_.subscribe("/usb_cam/image_raw", 1, &ImageConverter::imageCb, this);
    image_pub_ = it_.advertise("/camera/image_processed", 1);
-
    cv::namedWindow(OPENCV_WINDOW);
  }
 
@@ -60,10 +62,19 @@ public:
      ROS_ERROR("cv_bridge exception: %s", e.what());
      return;
    }
+
+  int iLowH, iHighH;
+  int iLowS = 43, iHighS = 255, iLowV = 46, iHighV = 255;
+  iLowH = 0;
+  iHighH = 10;//red
+  Mat imgHSV;
+  cv::cvtColor(cv_ptr->image, imgHSV, COLOR_BGR2HSV);//转为HSV
+
+  Mat imgThresholded;
+  /*
    cv::Mat hsv_img, mask_img;
    cvtColor(cv_ptr->image, hsv_img, COLOR_BGR2HSV);
    cv::inRange(hsv_img, cv::Scalar(LowH, LowS, LowV), cv::Scalar(HighH, HighS, HighV), mask_img);
-
    cv::erode(mask_img, mask_img, getStructuringElement(MORPH_ELLIPSE, Size(5, 5)));
    cv::dilate(mask_img, mask_img, getStructuringElement(MORPH_ELLIPSE, Size(5, 5)));
 
@@ -82,16 +93,72 @@ public:
    cv::RNG rng(12345);
    cv::findContours(mask_img, contours, hierarchy, CV_RETR_CCOMP, CV_CHAIN_APPROX_SIMPLE);
 
-  cv::Mat drawing = Mat::zeros(mask_img.size(), CV_8UC3);
-   for( int i = 0; i< contours.size(); i++ ){
+   cv::Mat drawing = Mat::zeros(mask_img.size(), CV_8UC3);
+   for( int i = 0; i< contours.size(); i++ )
+   {
     Scalar color = Scalar(rng.uniform(0, 255), rng.uniform(0,255), rng.uniform(0,255));
     drawContours(drawing, contours, i, color, 2, 8, hierarchy, 0, Point());
-  }
+    }
 
   cv::namedWindow(Contour_WINDOW);
   cv::imshow(Contour_WINDOW, drawing);
   cv::waitKey(3);
+*/
+  cv::inRange(imgHSV, Scalar(iLowH, iLowS, iLowV), Scalar(iHighH, iHighS, iHighV), imgThresholded); //Threshold the image
+  //开操作 (去除一些噪点)  如果二值化后图片干扰部分依然很多，增大下面的size
+  cv::Mat element = getStructuringElement(MORPH_RECT, Size(20, 20));
+  cv::morphologyEx(imgThresholded, imgThresholded, MORPH_OPEN, element);
 
+    //闭操作 (连接一些连通域)
+  cv::morphologyEx(imgThresholded, imgThresholded, MORPH_CLOSE, element);
+
+  //cv::namedWindow("Thresholded Image",CV_WINDOW_NORMAL);
+  //cv::imshow("Thresholded Image", imgThresholded);
+
+  std::vector<std::vector <cv::Point> > contours;
+  std::vector<Vec4i> hierarchy;
+  cv::findContours(imgThresholded, contours, hierarchy, CV_RETR_CCOMP, CV_CHAIN_APPROX_SIMPLE);//查找轮廓
+
+  int count = 0;
+  int point_x ;
+  cv::Point pt[512];//存储连通区域个数
+  cv::Moments moment;//矩
+  std::vector<Point> Center;//创建一个向量保存重心坐标
+
+  //cv::Mat drawing = Mat::zeros(imgThresholded.size(), CV_8UC3);
+  for (int i=0;i<contours.size();i++)//读取每一个轮廓求取重心
+  {
+      point_x = 0;
+      cv::Mat temp(contours.at(i));
+      Scalar color(0, 255, 255);//yellow
+      moment = moments(temp, false);
+
+      if (moment.m00 != 0)//除数不能为0
+      {
+        pt[i].x = cvRound(moment.m10 / moment.m00);//计算重心横坐标
+        pt[i].y = cvRound(moment.m01 / moment.m00);//计算重心纵坐标
+        point_x = pt[i].x;
+      }
+      cv::Point p = Point(pt[i].x, pt[i].y);//重心坐标
+      std::cout << pt[i].x << "," << pt[i].y << std::endl;
+      cv::circle(cv_ptr->image, p, 5, color, 2, 8, 0);//原图画出重心坐标
+      count++;//重心点数或者是连通区域数
+      Center.push_back(p);//将重心坐标保存到Center向量中
+  }
+
+    std::cout << "moment numbers：" << Center.size() << std::endl;
+    std::cout << "counter numbers：" << contours.size() << std::endl;
+
+    cv::imshow(OPENCV_WINDOW,cv_ptr->image);
+    cv::waitKey(3);
+    point_x = 0;
+
+  //imshow("result", inputImage);
+  //string name = "end"+int2string(color)+".jpg";
+  // imwrite(name, img);
+  //int result = (point_x > WIDTH_MIN) && (point_x < WIDTH_MAX) ? color : 0;
+  // return result;
+/*
   int largest_area = 2000; //Change value to adjust search size
 
   for(int i = 0; i< contours.size(); i++ ){
@@ -109,7 +176,7 @@ public:
       }
     }
   }
-
+*/
    image_pub_.publish(cv_ptr->toImageMsg());
   }
 };
